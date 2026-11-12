@@ -13,12 +13,12 @@ use App\Http\Controllers\SignatureController;
 use App\Http\Controllers\TemplateController;
 use Illuminate\Support\Facades\Route;
 
-// Authentication Routes (Guest)
+// Authentication Routes (Guest with Throttling)
 Route::middleware('guest')->group(function () {
     Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
-    Route::post('/login', [AuthController::class, 'login']);
+    Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:15,1');
     Route::get('/register', [AuthController::class, 'showRegister'])->name('register');
-    Route::post('/register', [AuthController::class, 'register']);
+    Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:10,1');
 });
 
 // Logout Route (Auth)

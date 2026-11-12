@@ -30,23 +30,52 @@ class DocumentAssetController extends Controller
         // SVG Sanitization
         if ($extension === 'svg' || str_contains($mime, 'svg')) {
             $content = file_get_contents($file->getRealPath());
-            // Strip scripts, event handlers, and data uris with javascript
-            $sanitized = preg_replace('/<script\b[^>]*>(.*?)<\/script>/is', '', $content);
-            $sanitized = preg_replace('/on\w+="[^"]*"/i', '', $sanitized);
-            $sanitized = preg_replace('/on\w+=\'[^\']*\'/i', '', $sanitized);
-            $sanitized = preg_replace('/href="javascript:[^"]*"/i', 'href="#"', $sanitized);
+
+            // Prevent XML External Entity (XXE) attacks
+            if (stripos($content, '<!ENTITY') !== false || stripos($content, '<!DOCTYPE') !== false) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'SVG contains prohibited entity declarations.',
+                ], 422);
+            }
+
+            // Remove scripts, foreign objects, objects, embeds, iframes
+            $sanitized = preg_replace('/<(script|foreignObject|object|embed|iframe)\b[^>]*>(.*?)<\/\1>/is', '', $content);
+            $sanitized = preg_replace('/<(script|foreignObject|object|embed|iframe)\b[^>]*\/>/is', '', $sanitized);
+
+            // Strip all inline JS event handlers (onload, onerror, onclick, onmouseover, etc.)
+            $sanitized = preg_replace('/\s*on[a-zA-Z]+\s*=\s*(["\'][^"\']*["\']|[^\s>]+)/is', '', $sanitized);
+
+            // Strip javascript: / vbscript: / data: in href and xlink:href
+            $sanitized = preg_replace('/(href|xlink:href)\s*=\s*["\']\s*(javascript|vbscript|data):[^"\']*["\']/is', '$1="#"', $sanitized);
 
             Storage::disk('public')->put('uploads/images/' . $safeName, $sanitized);
             $path = 'storage/uploads/images/' . $safeName;
             $width = 300;
             $height = 300;
         } else {
+            // Deep raster image validation (verifies real image bytes, prevents disguised PHP files)
+            $imageInfo = @getimagesize($file->getRealPath());
+            if (!$imageInfo || empty($imageInfo[0]) || empty($imageInfo[1])) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Corrupted or invalid image structure detected.',
+                ], 422);
+            }
+
+            $allowedTypes = [IMAGETYPE_JPEG, IMAGETYPE_PNG, IMAGETYPE_GIF, IMAGETYPE_WEBP];
+            if (!in_array($imageInfo[2], $allowedTypes, true)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Unsupported image file type.',
+                ], 422);
+            }
+
             $path = $file->storeAs('uploads/images', $safeName, 'public');
             $path = 'storage/' . $path;
 
-            $imageInfo = @getimagesize($file->getRealPath());
-            $width = $imageInfo ? $imageInfo[0] : null;
-            $height = $imageInfo ? $imageInfo[1] : null;
+            $width = $imageInfo[0];
+            $height = $imageInfo[1];
         }
 
         $docId = $request->input('document_id');

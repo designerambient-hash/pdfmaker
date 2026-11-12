@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\SecurityHeadersMiddleware;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -12,15 +13,12 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        $middleware->validateCsrfTokens(except: [
-            'documents/*',
-            'templates/*',
-            'tools/*',
-            'assets/*',
-            'signatures/*',
-            'saved-colors/*',
-            'pdf/*',
+        // Enforce OWASP security headers across all web responses
+        $middleware->web(append: [
+            SecurityHeadersMiddleware::class,
         ]);
+
+        // Full CSRF protection enabled across all routes (no exceptions)
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

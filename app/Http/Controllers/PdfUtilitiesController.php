@@ -14,6 +14,18 @@ class PdfUtilitiesController extends Controller
     ) {}
 
     /**
+     * Helper to verify genuine PDF header magic bytes.
+     */
+    protected function isRealPdf($file): bool
+    {
+        $handle = @fopen($file->getRealPath(), 'rb');
+        if (!$handle) return false;
+        $header = fread($handle, 5);
+        fclose($handle);
+        return strpos($header, '%PDF-') === 0;
+    }
+
+    /**
      * Show PDF Tools Hub page.
      */
     public function index()
@@ -31,8 +43,18 @@ class PdfUtilitiesController extends Controller
             'pdf_files.*' => 'required|file|mimes:pdf|max:30720',
         ]);
 
+        $files = $request->file('pdf_files');
+        foreach ($files as $f) {
+            if (!$this->isRealPdf($f)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Security Error: One or more uploaded files are not genuine PDF documents.',
+                ], 422);
+            }
+        }
+
         try {
-            $mergedUrl = $this->pdfService->mergePdfs($request->file('pdf_files'));
+            $mergedUrl = $this->pdfService->mergePdfs($files);
 
             return response()->json([
                 'success' => true,
@@ -58,6 +80,14 @@ class PdfUtilitiesController extends Controller
             'pages' => 'nullable|string', // e.g. "1,2,3" or "1-3"
         ]);
 
+        $file = $request->file('pdf_file');
+        if (!$this->isRealPdf($file)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Security Error: File does not have a valid PDF header signature.',
+            ], 422);
+        }
+
         try {
             $pagesList = null;
             if ($request->filled('pages')) {
@@ -75,7 +105,7 @@ class PdfUtilitiesController extends Controller
                 }
             }
 
-            $extracted = $this->pdfService->splitPdf($request->file('pdf_file'), $pagesList);
+            $extracted = $this->pdfService->splitPdf($file, $pagesList);
 
             $files = array_map(fn($path) => asset($path), $extracted);
 
@@ -103,9 +133,17 @@ class PdfUtilitiesController extends Controller
             'angle' => 'nullable|in:90,180,270',
         ]);
 
+        $file = $request->file('pdf_file');
+        if (!$this->isRealPdf($file)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Security Error: File does not have a valid PDF header signature.',
+            ], 422);
+        }
+
         try {
             $angle = (int) $request->input('angle', 90);
-            $rotatedUrl = $this->pdfService->rotatePdf($request->file('pdf_file'), $angle);
+            $rotatedUrl = $this->pdfService->rotatePdf($file, $angle);
 
             return response()->json([
                 'success' => true,
@@ -132,10 +170,18 @@ class PdfUtilitiesController extends Controller
             'position' => 'nullable|in:center,top,bottom',
         ]);
 
+        $file = $request->file('pdf_file');
+        if (!$this->isRealPdf($file)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Security Error: File does not have a valid PDF header signature.',
+            ], 422);
+        }
+
         try {
-            $text = $request->input('watermark_text');
+            $text = strip_tags($request->input('watermark_text'));
             $pos = $request->input('position', 'center');
-            $url = $this->pdfService->addWatermark($request->file('pdf_file'), $text, $pos);
+            $url = $this->pdfService->addWatermark($file, $text, $pos);
 
             return response()->json([
                 'success' => true,
@@ -162,10 +208,18 @@ class PdfUtilitiesController extends Controller
             'position' => 'nullable|in:bottom-center,bottom-right,top-center,top-right',
         ]);
 
+        $file = $request->file('pdf_file');
+        if (!$this->isRealPdf($file)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Security Error: File does not have a valid PDF header signature.',
+            ], 422);
+        }
+
         try {
-            $format = $request->input('format', 'Page {page} of {total}');
+            $format = strip_tags($request->input('format', 'Page {page} of {total}'));
             $pos = $request->input('position', 'bottom-center');
-            $url = $this->pdfService->addPageNumbers($request->file('pdf_file'), $format, $pos);
+            $url = $this->pdfService->addPageNumbers($file, $format, $pos);
 
             return response()->json([
                 'success' => true,

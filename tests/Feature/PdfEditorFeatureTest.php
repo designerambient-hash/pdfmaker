@@ -470,5 +470,79 @@ class PdfEditorFeatureTest extends TestCase
         $this->assertNull(Document::find($doc1->id));
         $this->assertNull(Document::find($doc2->id));
     }
+
+    /**
+     * Security Test: OWASP Security Headers.
+     */
+    public function test_owasp_security_headers_are_present(): void
+    {
+        $response = $this->get('/dashboard');
+        $response->assertStatus(200);
+
+        $response->assertHeader('X-Frame-Options', 'SAMEORIGIN');
+        $response->assertHeader('X-Content-Type-Options', 'nosniff');
+        $response->assertHeader('X-XSS-Protection', '1; mode=block');
+        $response->assertHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    }
+
+    /**
+     * Security Test: Anti-Brute-Force Rate Limiting on Login.
+     */
+    public function test_login_rate_limiting_locks_out_after_too_many_attempts(): void
+    {
+        auth()->logout();
+
+        $email = 'victim_' . uniqid() . '@example.com';
+
+        // Perform 5 consecutive failed attempts
+        for ($i = 0; $i < 5; $i++) {
+            $this->post('/login', [
+                'email' => $email,
+                'password' => 'wrong-password',
+            ]);
+        }
+
+        // 6th attempt must be throttled with rate limit error message
+        $response = $this->post('/login', [
+            'email' => $email,
+            'password' => 'wrong-password',
+        ]);
+
+        $response->assertSessionHasErrors('email');
+        $errors = session('errors')->get('email');
+        $this->assertStringContainsString('Too many failed login attempts', $errors[0]);
+    }
+
+    /**
+     * Security Test: Uploading a fake or masked non-PDF file is rejected.
+     */
+    public function test_fake_pdf_upload_is_rejected(): void
+    {
+        // Fake PDF with PHP content
+        $fakePdf = UploadedFile::fake()->createWithContent('malicious.pdf', '<?php echo "hacked"; ?>');
+
+        $response = $this->postJson('/pdf/import', [
+            'pdf_file' => $fakePdf,
+        ]);
+
+        $response->assertStatus(422);
+        $response->assertJsonFragment(['success' => false]);
+    }
+
+    /**
+     * Security Test: Prohibited XXE entities in SVG are rejected.
+     */
+    public function test_prohibited_xxe_entities_in_svg_are_rejected(): void
+    {
+        $maliciousSvg = '<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><svg>&xxe;</svg>';
+        $svgFile = UploadedFile::fake()->createWithContent('exploit.svg', $maliciousSvg);
+
+        $response = $this->postJson('/assets/upload-image', [
+            'image' => $svgFile,
+        ]);
+
+        $response->assertStatus(422);
+        $response->assertJsonFragment(['success' => false]);
+    }
 }
 

@@ -27,9 +27,24 @@ class PdfImportController extends Controller
         ]);
 
         $file = $request->file('pdf_file');
+
+        // Check PDF Magic Bytes (%PDF-)
+        $handle = @fopen($file->getRealPath(), 'rb');
+        $header = $handle ? fread($handle, 5) : '';
+        if ($handle) {
+            fclose($handle);
+        }
+
+        if (strpos($header, '%PDF-') !== 0) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Security Error: File does not have a valid PDF header signature.',
+            ], 422);
+        }
+
         $originalName = pathinfo($file->getClientOriginalName(), PATHINFO_FILENAME);
-        $title = $request->input('title') ?: $originalName;
-        $safeName = Str::random(24) . '.pdf';
+        $title = strip_tags($request->input('title') ?: $originalName);
+        $safeName = Str::random(32) . '.pdf';
 
         $storedPath = $file->storeAs('uploads/pdfs', $safeName, 'public');
         $fullPath = storage_path('app/public/' . $storedPath);
@@ -38,6 +53,15 @@ class PdfImportController extends Controller
         // Inspect PDF info
         $pdfInfo = $this->pdfService->getPdfInfo($fullPath);
         $pageCount = $pdfInfo['page_count'] ?? 1;
+
+        if ($pageCount > 250) {
+            @unlink($fullPath);
+            return response()->json([
+                'success' => false,
+                'message' => 'PDF exceeds maximum allowed page count (250 pages limit).',
+            ], 422);
+        }
+
         $firstPage = $pdfInfo['pages'][0] ?? ['width' => 794, 'height' => 1123, 'orientation' => 'portrait'];
 
         $document = Document::create([

@@ -10,6 +10,9 @@ use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rules\Password;
 
 class AuthController extends Controller
@@ -27,18 +30,37 @@ class AuthController extends Controller
     }
 
     /**
-     * Handle user login.
+     * Handle user login with anti-brute force rate limiting.
      */
     public function login(Request $request)
     {
         $credentials = $request->validate([
-            'email' => 'required|email',
-            'password' => 'required|string',
+            'email' => 'required|email|max:255',
+            'password' => 'required|string|max:255',
         ]);
+
+        $throttleKey = Str::transliterate(Str::lower($request->input('email')) . '|' . $request->ip());
+
+        // Maximum 5 failed attempts per minute
+        if (RateLimiter::tooManyAttempts($throttleKey, 5)) {
+            $seconds = RateLimiter::availableIn($throttleKey);
+
+            Log::warning('Login rate limit exceeded', [
+                'email' => $request->input('email'),
+                'ip' => $request->ip(),
+                'seconds_remaining' => $seconds,
+            ]);
+
+            return back()->withErrors([
+                'email' => "Too many failed login attempts. For security reasons, please try again in {$seconds} seconds.",
+            ])->onlyInput('email');
+        }
 
         $remember = $request->boolean('remember');
 
         if (Auth::attempt($credentials, $remember)) {
+            RateLimiter::clear($throttleKey);
+
             $sessionId = $request->session()->getId();
             $request->session()->regenerate();
             $user = Auth::user();
@@ -49,6 +71,14 @@ class AuthController extends Controller
             return redirect()->intended(route('dashboard'))
                 ->with('toast_success', 'Welcome back, ' . $user->name . '!');
         }
+
+        // Record failed attempt
+        RateLimiter::hit($throttleKey, 60);
+
+        Log::notice('Failed login attempt', [
+            'email' => $request->input('email'),
+            'ip' => $request->ip(),
+        ]);
 
         return back()->withErrors([
             'email' => 'The provided credentials do not match our records.',
@@ -73,16 +103,18 @@ class AuthController extends Controller
     public function register(Request $request)
     {
         $validated = $request->validate([
-            'name' => 'required|string|max:255',
+            'name' => 'required|string|max:100|regex:/^[\pL\s\-]+$/u',
             'email' => 'required|string|email|max:255|unique:users,email',
-            'password' => ['required', 'confirmed', Password::min(6)],
+            'password' => ['required', 'confirmed', Password::min(8)],
+        ], [
+            'name.regex' => 'Name may only contain letters, spaces, and hyphens.',
         ]);
 
         $sessionId = $request->session()->getId();
 
         $user = User::create([
-            'name' => $validated['name'],
-            'email' => $validated['email'],
+            'name' => strip_tags(trim($validated['name'])),
+            'email' => strtolower(trim($validated['email'])),
             'password' => Hash::make($validated['password']),
         ]);
 
